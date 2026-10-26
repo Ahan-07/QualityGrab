@@ -1,68 +1,83 @@
-name: Build QualityGrab for Windows
+name: Build and Release QualityGrab for Windows
 
 on:
   workflow_dispatch:
   push:
-    branches: [ "main", "master" ]
+    branches: ["main", "master"]
     paths:
       - "app.py"
       - "requirements.txt"
       - ".github/workflows/build-windows.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-windows:
     runs-on: windows-latest
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
-      - name: Install Python dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
+          python -m pip install "yt-dlp[default]" pyinstaller
 
       - name: Build QualityGrab executable
         run: |
           pyinstaller --noconfirm --clean --windowed --name QualityGrab --collect-all yt_dlp app.py
 
-      - name: Download FFmpeg Windows build
+      - name: Download and bundle FFmpeg tools
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
-          Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\ffmpeg.zip"
+          Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile "$env:RUNNER_TEMP\ffmpeg.zip"
           Expand-Archive -Path "$env:RUNNER_TEMP\ffmpeg.zip" -DestinationPath "$env:RUNNER_TEMP\ffmpeg" -Force
           $ffmpeg = Get-ChildItem "$env:RUNNER_TEMP\ffmpeg" -Recurse -Filter ffmpeg.exe | Select-Object -First 1
           $ffprobe = Get-ChildItem "$env:RUNNER_TEMP\ffmpeg" -Recurse -Filter ffprobe.exe | Select-Object -First 1
-          if (-not $ffmpeg -or -not $ffprobe) { throw "Could not find ffmpeg.exe or ffprobe.exe in the downloaded archive." }
+          if (-not $ffmpeg -or -not $ffprobe) { throw "ffmpeg.exe or ffprobe.exe not found" }
           Copy-Item $ffmpeg.FullName "dist\QualityGrab\ffmpeg.exe"
           Copy-Item $ffprobe.FullName "dist\QualityGrab\ffprobe.exe"
-
-      - name: Create portable package notes
-        shell: pwsh
-        run: |
           @"
           QualityGrab portable Windows package
 
-          Run QualityGrab.exe. FFmpeg and ffprobe are included in this folder.
-          Keep all files in this folder together.
+          1. Extract this ZIP.
+          2. Keep all files in the extracted folder together.
+          3. Double-click QualityGrab.exe.
+          Python does not need to be installed.
+          Use only for content you own, have permission to download, or are otherwise authorized to save.
+          "@ | Set-Content "dist\QualityGrab\README.txt" -Encoding utf8
 
-          Use only for videos you own, have permission to download, or are otherwise authorized to save.
-          "@ | Set-Content -Path "dist\QualityGrab\README.txt" -Encoding utf8
+      - name: Create distributable ZIP
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "dist\QualityGrab\*" -DestinationPath "dist\QualityGrab-Windows-x64.zip" -Force
 
-      - name: Upload Windows package
-        uses: actions/upload-artifact@v4
+      - name: Upload temporary build artifact
+        uses: actions/upload-artifact@v5
         with:
           name: QualityGrab-Windows-x64
-          path: dist/QualityGrab/
+          path: dist/QualityGrab-Windows-x64.zip
           if-no-files-found: error
           retention-days: 14
+
+      - name: Publish permanent public GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: QualityGrab v1.0.${{ github.run_number }}
+          body: |
+            QualityGrab for Windows x64.
+
+            **Install:** Download and extract `QualityGrab-Windows-x64.zip`, then double-click `QualityGrab.exe`. Keep all extracted files together. Python does not need to be installed.
+
+            FFmpeg tools are included. Windows SmartScreen may show a warning because the app is not code-signed.
+            Use only for content you own, have permission to download, or are otherwise authorized to save.
+          files: dist/QualityGrab-Windows-x64.zip
+          make_latest: true
