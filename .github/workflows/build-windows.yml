@@ -1,0 +1,68 @@
+name: Build QualityGrab for Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main", "master" ]
+    paths:
+      - "app.py"
+      - "requirements.txt"
+      - ".github/workflows/build-windows.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build QualityGrab executable
+        run: |
+          pyinstaller --noconfirm --clean --windowed --name QualityGrab --collect-all yt_dlp app.py
+
+      - name: Download FFmpeg Windows build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+          Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\ffmpeg.zip"
+          Expand-Archive -Path "$env:RUNNER_TEMP\ffmpeg.zip" -DestinationPath "$env:RUNNER_TEMP\ffmpeg" -Force
+          $ffmpeg = Get-ChildItem "$env:RUNNER_TEMP\ffmpeg" -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+          $ffprobe = Get-ChildItem "$env:RUNNER_TEMP\ffmpeg" -Recurse -Filter ffprobe.exe | Select-Object -First 1
+          if (-not $ffmpeg -or -not $ffprobe) { throw "Could not find ffmpeg.exe or ffprobe.exe in the downloaded archive." }
+          Copy-Item $ffmpeg.FullName "dist\QualityGrab\ffmpeg.exe"
+          Copy-Item $ffprobe.FullName "dist\QualityGrab\ffprobe.exe"
+
+      - name: Create portable package notes
+        shell: pwsh
+        run: |
+          @"
+          QualityGrab portable Windows package
+
+          Run QualityGrab.exe. FFmpeg and ffprobe are included in this folder.
+          Keep all files in this folder together.
+
+          Use only for videos you own, have permission to download, or are otherwise authorized to save.
+          "@ | Set-Content -Path "dist\QualityGrab\README.txt" -Encoding utf8
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: QualityGrab-Windows-x64
+          path: dist/QualityGrab/
+          if-no-files-found: error
+          retention-days: 14
